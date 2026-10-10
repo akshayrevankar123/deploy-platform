@@ -37,8 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t sample-app:ci .
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.35.0
         with:
+          version: v0.69.3
           image-ref: sample-app:ci
           severity: CRITICAL
           ignore-unfixed: true

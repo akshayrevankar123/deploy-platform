@@ -1,0 +1,16 @@
+# Gitleaks configuration for this repository.
+# "useDefault = true" keeps ALL of Gitleaks' built-in secret rules. Without this line a custom
+# config would REPLACE them and the scan would silently detect nothing.
+title = "deploy-platform gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Obviously fake passwords used only in automated tests and documentation"
+regexes = [
+  '''StrongPass123''',
+  '''WrongPass999''',
+  '''hunter2''',
+  '''SuperSecret''',
+]

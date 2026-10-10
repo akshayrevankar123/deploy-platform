@@ -45,16 +45,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Rule: CRITICAL vulnerabilities stop the pipeline.
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.35.0
         with:
+          version: v0.69.3
           scan-type: fs
           scan-ref: backend
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       # Lower severities are shown as warnings only (exit-code 0).
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.35.0
         with:
+          version: v0.69.3
           scan-type: fs
           scan-ref: backend
           severity: HIGH,MEDIUM
@@ -70,15 +72,17 @@ jobs:
       - name: Build image
         run: docker build -t deploy-platform-backend:ci .
       - name: Fail on CRITICAL vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
+          version: v0.69.3
           image-ref: deploy-platform-backend:ci
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Report HIGH/MEDIUM as warnings
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
+          version: v0.69.3
           image-ref: deploy-platform-backend:ci
           severity: HIGH,MEDIUM
           ignore-unfixed: true
