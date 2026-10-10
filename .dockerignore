@@ -1,0 +1,17 @@
+# Keep secrets, junk and huge folders out of the image.
+.git
+.github
+docs
+**/node_modules
+**/dist
+**/venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/*.db
+.env
+**/.env
+**/.env.*
+!**/.env.example
+backend/tests

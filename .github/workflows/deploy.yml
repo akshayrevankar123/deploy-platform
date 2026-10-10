@@ -1,0 +1,158 @@
+# Deploy pipeline. Runs only AFTER the CI workflow (tests + Gitleaks + Trivy) succeeded on main,
+# or when you start it by hand from the Actions tab.
+#
+# Required GitHub secrets (Settings > Secrets and variables > Actions):
+#   DOCKERHUB_USERNAME   your Docker Hub username
+#   DOCKERHUB_TOKEN      a Docker Hub access token (NOT your password)
+#   EC2_HOST             public IP or DNS name of the EC2 instance
+#   EC2_USER             ec2-user
+#   EC2_SSH_KEY          the full private key text (.pem file contents) used only for deploying
+# Optional repository variable:
+#   PLATFORM_PROJECT_ID  the project id in YOUR deployed platform, so the dashboard shows the result
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deployments at the same time.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, push and deploy to EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only deploy code that PASSED CI on a push to main (never from pull requests).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    # Optional: in GitHub > Settings > Environments > production you can add "required reviewers"
+    # so that every deployment needs your manual approval.
+    environment: production
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+
+      - name: Check that all required secrets exist
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          missing=0
+          for name in DOCKERHUB_USERNAME DOCKERHUB_TOKEN EC2_HOST EC2_USER EC2_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub secret: $name"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Work out the image name
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          image="${DOCKERHUB_USERNAME,,}/deploy-platform:${TARGET_SHA::7}"
+          if ! [[ "$image" =~ ^[a-z0-9_.-]+/[a-z0-9_.-]+:[a-f0-9]{7}$ ]]; then
+            echo "::error::Unexpected image name"
+            exit 1
+          fi
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: docker build -t "$IMAGE" .
+
+      # Last gate: the exact image we are about to ship must have no CRITICAL (fixable) vulnerabilities.
+      - name: Scan image (CRITICAL stops the deployment)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push image
+        run: docker push "$IMAGE"
+
+      - name: Prepare SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy on EC2
+        id: deploy
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 "$EC2_USER@$EC2_HOST" \
+            "IMAGE='$IMAGE' bash -s" < deploy/remote-deploy.sh
+
+      - name: Health check from outside AWS
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS --max-time 5 "http://$EC2_HOST/health"; then
+              echo
+              echo "Healthy after attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::The public /health endpoint did not answer. Check the EC2 security group (port 80)."
+          exit 1
+
+      # Best effort: tells your deployed dashboard what happened. Never fails the pipeline.
+      - name: Report result to the dashboard
+        if: always() && steps.deploy.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          PROJECT_ID: ${{ vars.PLATFORM_PROJECT_ID }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if ! [[ "$PROJECT_ID" =~ ^[0-9]+$ ]]; then
+            echo "PLATFORM_PROJECT_ID is not set. Skipping the dashboard report."
+            exit 0
+          fi
+          status=failed
+          live_url=""
+          if [ "$JOB_STATUS" = "success" ]; then
+            status=success
+            live_url="http://$EC2_HOST"
+          fi
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 "$EC2_USER@$EC2_HOST" \
+            "PROJECT_ID='$PROJECT_ID' STATUS='$status' LIVE_URL='$live_url' MESSAGE='Commit ${TARGET_SHA::7}, run ${GITHUB_RUN_NUMBER}' bash -s" \
+            < deploy/remote-report.sh
+
+      - name: Remove the SSH key from the runner
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

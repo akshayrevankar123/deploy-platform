@@ -1,0 +1,34 @@
+# Runs the backend together with PostgreSQL on your own machine.
+# Usage: copy .env.example to .env (in this folder), fill it in, then:  docker compose up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: deploy_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: deploy_platform
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # keeps data when the container is removed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deploy_user -d deploy_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No "ports:" on purpose. The database is reachable only from other containers,
+    # never from outside.
+
+  backend:
+    build: .   # Dockerfile at the repo root (builds frontend + backend)
+    environment:
+      DATABASE_URL: postgresql+psycopg://deploy_user:${POSTGRES_PASSWORD}@db:5432/deploy_platform
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      DEPLOY_REPORT_TOKEN: ${DEPLOY_REPORT_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,27 @@
+# Secrets (never commit these)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Databases
+*.db
+*.sqlite3
+
+# Node / frontend
+node_modules/
+dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

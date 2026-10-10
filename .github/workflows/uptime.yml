@@ -1,0 +1,40 @@
+# Free uptime alert. Every 15 minutes GitHub calls your app's /health.
+# If the app is down, this run FAILS and GitHub emails you (default notification for failed workflows).
+#
+# Notes:
+# - Scheduled runs can be delayed by several minutes. This is "good enough" monitoring, not a pager.
+# - GitHub pauses scheduled workflows in a repo with no activity for 60 days.
+# - When you STOP your EC2 instance to save money, disable this workflow (Actions tab > Uptime check > ... > Disable),
+#   otherwise you will get failure emails.
+name: Uptime check
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call /health
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          if [ -z "$EC2_HOST" ]; then
+            echo "EC2_HOST secret is not set yet. Nothing to check."
+            exit 0
+          fi
+          for i in 1 2 3; do
+            if curl -fsS --max-time 10 "http://$EC2_HOST/health"; then
+              echo
+              echo "UP"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::The app is DOWN (no healthy answer from /health after 3 tries)"
+          exit 1
